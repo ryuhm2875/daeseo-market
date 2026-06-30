@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>학생 등록 및 바코드 생성</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/tabler-icons/2.47.0/iconfont/tabler-icons.min.css">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, "Apple SD Gothic Neo", "Pretendard", system-ui, sans-serif;
+    background: #F2F4F6; color: #191F28; padding: 32px 24px 80px;
+  }
+  .wrap { max-width: 880px; margin: 0 auto; }
+  h1 { font-size: 28px; font-weight: 700; letter-spacing: -0.4px; margin-bottom: 6px; }
+  .subtitle { font-size: 16px; color: #8B95A1; margin-bottom: 28px; }
+  .card { background: #fff; border-radius: 20px; padding: 28px; margin-bottom: 16px; }
+  .section-label { font-size: 15px; font-weight: 700; margin-bottom: 14px; }
+  textarea {
+    width: 100%; height: 220px; border-radius: 14px; border: none;
+    background: #F2F4F6; padding: 16px 18px; font-size: 16px; font-family: inherit;
+    resize: vertical; outline: none; line-height: 1.6;
+  }
+  textarea:focus { background: #E8F3FF; box-shadow: 0 0 0 2px #3182F6 inset; }
+  button {
+    border-radius: 14px; border: none; padding: 16px 24px; font-size: 16px; font-weight: 700;
+    font-family: inherit; cursor: pointer; margin-top: 14px; margin-right: 8px;
+  }
+  .btn-primary { background: #3182F6; color: #fff; }
+  .btn-primary:active { background: #2272EB; }
+  .btn-secondary { background: #F2F4F6; color: #191F28; }
+  .help { font-size: 14px; color: #8B95A1; line-height: 1.7; margin-bottom: 14px; }
+  .help b { color: #191F28; font-weight: 600; }
+  .status { font-size: 15px; font-weight: 600; margin-top: 14px; }
+  .status.ok { color: #3182F6; }
+  .status.error { color: #F04452; }
+  .barcode-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-top: 8px; }
+  .barcode-card {
+    border-radius: 14px; padding: 18px 14px; text-align: center; background: #F2F4F6;
+  }
+  .barcode-card .name { font-size: 16px; font-weight: 700; margin-bottom: 10px; }
+  .barcode-card svg { width: 100%; height: 50px; }
+  .barcode-card .code { font-size: 13px; color: #8B95A1; margin-top: 6px; letter-spacing: 1px; font-weight: 600; }
+  @media print {
+    body { background: #fff; padding: 0; }
+    .no-print { display: none; }
+    .card { box-shadow: none; padding: 0; }
+    .barcode-grid { grid-template-columns: repeat(3, 1fr); }
+    .barcode-card { background: #fff; border: 1px solid #E5E8EB; break-inside: avoid; }
+  }
+  @media (max-width: 600px) {
+    .barcode-grid { grid-template-columns: repeat(2, 1fr); }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>학생 등록 및 바코드 생성</h1>
+  <p class="subtitle">명단을 입력하면 자동으로 등록되고 바코드 카드가 만들어져요</p>
+
+  <div class="card no-print">
+    <p class="section-label">학생 명단 입력</p>
+    <p class="help">
+      한 줄에 한 명씩 이름만 입력하면 <b>GH001</b>부터 학번이 자동으로 매겨져요.<br>
+      학번을 직접 지정하려면 <b>학번,이름</b> 형식으로 입력하세요. (예: GH010,박지호)
+    </p>
+    <textarea id="student-input" placeholder="박지호&#10;이서연&#10;김민준&#10;..."></textarea>
+    <div>
+      <button class="btn-primary" onclick="registerStudents()"><i class="ti ti-cloud-upload" style="margin-right:6px;"></i>등록하고 바코드 생성</button>
+      <button class="btn-secondary" onclick="window.print()"><i class="ti ti-printer" style="margin-right:6px;"></i>바코드 카드 인쇄</button>
+    </div>
+    <div class="status" id="status"></div>
+  </div>
+
+  <div class="card" id="barcode-section" style="display:none;">
+    <p class="section-label">생성된 바코드 카드</p>
+    <div class="barcode-grid" id="barcode-grid"></div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/10.12.2/firebase-app-compat.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/10.12.2/firebase-firestore-compat.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.6/JsBarcode.all.min.js"></script>
+<script>
+const firebaseConfig = {
+  apiKey: "AIzaSyBsm8OMI_Do2T1d1tUZqjBavwp8bc4IKGg",
+  authDomain: "market-399ce.firebaseapp.com",
+  projectId: "market-399ce",
+  storageBucket: "market-399ce.firebasestorage.app",
+  messagingSenderId: "255179750883",
+  appId: "1:255179750883:web:a7c74cbef815821e9834d6"
+};
+firebase.initializeApp(firebaseConfig);
+const db = firebase.firestore();
+
+async function registerStudents() {
+  const raw = document.getElementById('student-input').value.trim();
+  if (!raw) { setStatus('명단을 입력해 주세요', true); return; }
+  const lines = raw.split('\n').map(l => l.trim()).filter(Boolean);
+
+  setStatus(lines.length + '명을 등록하고 있어요', false);
+
+  const existing = await db.collection('students').get();
+  let maxNum = 0;
+  existing.docs.forEach(d => {
+    const m = (d.data().id || '').match(/GH(\d+)/);
+    if (m) maxNum = Math.max(maxNum, parseInt(m[1], 10));
+  });
+
+  const batch = db.batch();
+  const newStudents = [];
+  lines.forEach(line => {
+    let id, name;
+    if (line.includes(',')) {
+      const parts = line.split(',');
+      id = parts[0].trim();
+      name = parts[1].trim();
+      if (!id) { maxNum++; id = 'GH' + String(maxNum).padStart(3, '0'); }
+    } else {
+      maxNum++;
+      id = 'GH' + String(maxNum).padStart(3, '0');
+      name = line;
+    }
+    const ref = db.collection('students').doc();
+    batch.set(ref, { id, name, balance: 0 });
+    newStudents.push({ id, name });
+  });
+
+  try {
+    await batch.commit();
+    setStatus(newStudents.length + '명 등록을 완료했어요', false);
+    renderBarcodes(newStudents);
+  } catch (e) {
+    setStatus('등록 중 문제가 생겼어요: ' + e.message, true);
+  }
+}
+
+function renderBarcodes(list) {
+  const section = document.getElementById('barcode-section');
+  const grid = document.getElementById('barcode-grid');
+  grid.innerHTML = '';
+  section.style.display = 'block';
+  list.forEach(s => {
+    const card = document.createElement('div');
+    card.className = 'barcode-card';
+    card.innerHTML =
+      '<div class="name">' + escapeHtml(s.name) + '</div>' +
+      '<svg class="bc"></svg>' +
+      '<div class="code">' + escapeHtml(s.id) + '</div>';
+    grid.appendChild(card);
+    const svg = card.querySelector('.bc');
+    JsBarcode(svg, s.id, { format: "CODE128", displayValue: false, height: 40, margin: 0 });
+  });
+}
+
+function setStatus(msg, isError) {
+  const el = document.getElementById('status');
+  el.textContent = msg;
+  el.className = 'status ' + (isError ? 'error' : 'ok');
+}
+function escapeHtml(str) {
+  return String(str).replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  })[c]);
+}
+</script>
+</body>
+</html>
