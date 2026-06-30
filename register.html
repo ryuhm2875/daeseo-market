@@ -1,0 +1,156 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>학생 등록 / 바코드 생성</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, "SF Pro Text", "Apple SD Gothic Neo", system-ui, sans-serif;
+    background: #f5f5f7; color: #1d1d1f; padding: 24px 16px 60px;
+  }
+  .wrap { max-width: 680px; margin: 0 auto; }
+  h1 { font-size: 22px; font-weight: 600; letter-spacing: -0.28px; margin-bottom: 4px; }
+  .subtitle { font-size: 13px; color: #7a7a7a; margin-bottom: 20px; }
+  .card { background: #fff; border-radius: 18px; border: 1px solid #e0e0e0; padding: 20px; margin-bottom: 16px; }
+  textarea {
+    width: 100%; height: 200px; border-radius: 12px; border: 1px solid #e0e0e0;
+    padding: 12px 14px; font-size: 14px; font-family: inherit; resize: vertical; outline: none;
+  }
+  textarea:focus { border-color: #0066cc; }
+  button {
+    border-radius: 9999px; border: none; padding: 11px 20px; font-size: 14px;
+    font-family: inherit; cursor: pointer; background: #0066cc; color: #fff; margin-top: 12px;
+  }
+  button.secondary { background: #fafafc; color: #1d1d1f; border: 1px solid rgba(0,0,0,0.08); }
+  .help { font-size: 13px; color: #7a7a7a; line-height: 1.6; margin-bottom: 10px; }
+  .status { font-size: 14px; margin-top: 12px; }
+  .barcode-grid {
+    display: grid; grid-template-columns: repeat(2, 1fr); gap: 10px; margin-top: 16px;
+  }
+  .barcode-card {
+    border: 1px solid #e0e0e0; border-radius: 12px; padding: 12px; text-align: center; background: #fff;
+  }
+  .barcode-card .name { font-size: 14px; font-weight: 600; margin-bottom: 6px; }
+  .barcode-card svg { width: 100%; height: 50px; }
+  .barcode-card .code { font-size: 11px; color: #7a7a7a; margin-top: 4px; letter-spacing: 1px; }
+  @media print {
+    .no-print { display: none; }
+    .barcode-grid { grid-template-columns: repeat(2, 1fr); }
+    .barcode-card { break-inside: avoid; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>학생 등록 / 바코드 생성</h1>
+  <p class="subtitle">명단을 입력하면 Firestore에 등록되고, 바코드 카드가 생성됩니다.</p>
+
+  <div class="card no-print">
+    <p class="help">
+      한 줄에 한 명씩, "학번,이름" 형식으로 입력하세요.<br>
+      학번은 비워두면 GH001부터 자동으로 부여됩니다.<br>
+      예시: GH001,박지호 (또는 그냥 박지호 만 입력해도 됩니다)
+    </p>
+    <textarea id="student-input" placeholder="박지호&#10;이서연&#10;김민준&#10;..."></textarea>
+    <div>
+      <button onclick="registerStudents()">Firestore에 등록하고 바코드 생성</button>
+      <button class="secondary" onclick="window.print()">바코드 카드 인쇄</button>
+    </div>
+    <div class="status" id="status"></div>
+  </div>
+
+  <div class="card" id="barcode-section" style="display:none;">
+    <div class="barcode-grid" id="barcode-grid"></div>
+  </div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/10.12.2/firebase-app-compat.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/firebase/10.12.2/firebase-firestore-compat.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jsbarcode/3.11.6/JsBarcode.all.min.js"></script>
+<script>
+const firebaseConfig = {
+  apiKey: "AIzaSyBsm8OMI_Do2T1d1tUZqjBavwp8bc4IKGg",
+  authDomain: "market-399ce.firebaseapp.com",
+  projectId: "market-399ce",
+  storageBucket: "market-399ce.firebasestorage.app",
+  messagingSenderId: "255179750883",
+  appId: "1:255179750883:web:a7c74cbef815821e9834d6"
+};
+firebase.initializeApp(firebaseConfig);
+const db = firebase.firestore();
+
+async function registerStudents() {
+  const raw = document.getElementById('student-input').value.trim();
+  if (!raw) { setStatus('명단을 입력하세요', true); return; }
+  const lines = raw.split('\n').map(l => l.trim()).filter(Boolean);
+
+  setStatus('등록 중... (' + lines.length + '명)');
+
+  const existing = await db.collection('students').get();
+  let maxNum = 0;
+  existing.docs.forEach(d => {
+    const m = (d.data().id || '').match(/GH(\d+)/);
+    if (m) maxNum = Math.max(maxNum, parseInt(m[1], 10));
+  });
+
+  const batch = db.batch();
+  const newStudents = [];
+  lines.forEach(line => {
+    let id, name;
+    if (line.includes(',')) {
+      const parts = line.split(',');
+      id = parts[0].trim();
+      name = parts[1].trim();
+      if (!id) { maxNum++; id = 'GH' + String(maxNum).padStart(3, '0'); }
+    } else {
+      maxNum++;
+      id = 'GH' + String(maxNum).padStart(3, '0');
+      name = line;
+    }
+    const ref = db.collection('students').doc();
+    batch.set(ref, { id, name, balance: 0 });
+    newStudents.push({ id, name });
+  });
+
+  try {
+    await batch.commit();
+    setStatus(newStudents.length + '명 등록 완료. 바코드를 생성합니다.');
+    renderBarcodes(newStudents);
+  } catch (e) {
+    setStatus('등록 중 오류가 발생했습니다: ' + e.message, true);
+  }
+}
+
+function renderBarcodes(list) {
+  const section = document.getElementById('barcode-section');
+  const grid = document.getElementById('barcode-grid');
+  grid.innerHTML = '';
+  section.style.display = 'block';
+  list.forEach(s => {
+    const card = document.createElement('div');
+    card.className = 'barcode-card';
+    card.innerHTML =
+      '<div class="name">' + escapeHtml(s.name) + '</div>' +
+      '<svg class="bc"></svg>' +
+      '<div class="code">' + escapeHtml(s.id) + '</div>';
+    grid.appendChild(card);
+    const svg = card.querySelector('.bc');
+    JsBarcode(svg, s.id, { format: "CODE128", displayValue: false, height: 40, margin: 0 });
+  });
+}
+
+function setStatus(msg, isError) {
+  const el = document.getElementById('status');
+  el.textContent = msg;
+  el.style.color = isError ? '#a32d2d' : '#0066cc';
+}
+function escapeHtml(str) {
+  return String(str).replace(/[&<>"']/g, c => ({
+    '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+  })[c]);
+}
+</script>
+</body>
+</html>
